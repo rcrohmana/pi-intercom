@@ -1,0 +1,9 @@
+{
+  "name": "pi-intercom",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.ts",
+  "dependencies": {
+    "tsx": "^4.20.0"
+  }
+}
