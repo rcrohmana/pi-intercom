@@ -4,6 +4,12 @@ All notable changes to the `pi-intercom` extension will be documented in this fi
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-04-13
+
+### Changed
+- Switched intercom send confirmation to opt-in. `send` now delivers immediately by default, and interactive confirmation only appears when `confirmSend: true` is set in `~/.pi/agent/intercom/config.json`.
+- Replaced the old inverted `autoSend` config with `confirmSend` to make the behavior easier to understand.
+
 ## [0.1.4] - 2026-04-13
 
 ### Added

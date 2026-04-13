@@ -292,7 +292,7 @@ Usage:
                 isError: true,
               };
             }
-            if (!replyTo && !config.autoSend && ctx.hasUI) {
+            if (!replyTo && config.confirmSend && ctx.hasUI) {
               const attachmentText = attachments?.length ? formatAttachments(attachments) : "";
               const confirmed = await ctx.ui.confirm(
                 "Send Message",

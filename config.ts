@@ -4,9 +4,9 @@ import { join } from "path";
 import { homedir } from "os";
 
 export interface IntercomConfig {
-  /** Allow agent to send messages without confirmation */
-  autoSend: boolean;
-  
+  /** Require confirmation before non-reply sends from interactive sessions */
+  confirmSend: boolean;
+
   /** Custom status shown to other sessions */
   status?: string;
   
@@ -20,7 +20,7 @@ export interface IntercomConfig {
 const CONFIG_PATH = join(homedir(), ".pi/agent/intercom/config.json");
 
 const defaults: IntercomConfig = {
-  autoSend: false,
+  confirmSend: false,
   enabled: true,
   replyHint: true,
 };
@@ -40,11 +40,11 @@ export function loadConfig(): IntercomConfig {
     const parsedConfig = parsed as Record<string, unknown>;
     const config: IntercomConfig = { ...defaults };
 
-    if (Object.hasOwn(parsedConfig, "autoSend")) {
-      if (typeof parsedConfig.autoSend !== "boolean") {
-        throw new Error(`"autoSend" must be a boolean`);
+    if (Object.hasOwn(parsedConfig, "confirmSend")) {
+      if (typeof parsedConfig.confirmSend !== "boolean") {
+        throw new Error(`"confirmSend" must be a boolean`);
       }
-      config.autoSend = parsedConfig.autoSend;
+      config.confirmSend = parsedConfig.confirmSend;
     }
 
     if (Object.hasOwn(parsedConfig, "enabled")) {

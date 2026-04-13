@@ -171,11 +171,11 @@ This matters because the agent receiving the message doesn't need to construct t
 
 ### `send` vs `ask`
 
-`send` is fire-and-forget — the tool returns immediately after delivery. In interactive sessions with UI available, it shows a confirmation dialog by default (disable with `autoSend: true` in config). Replies that include `replyTo` skip the confirmation dialog so reply-hint flows can continue without an extra approval step.
+`send` is fire-and-forget — the tool returns immediately after delivery. By default, it sends immediately even in interactive sessions. If you want an approval dialog before non-reply sends, set `confirmSend: true` in config. Replies that include `replyTo` still skip confirmation so reply-hint flows can continue without an extra approval step.
 
 `ask` sends the message and blocks until the recipient responds (10-minute timeout). The reply comes back as the tool result, so the agent continues in the same turn with full context. No confirmation dialog — if you're asking and waiting, the intent is clear.
 
-The planner typically uses `send` (user reviews outgoing messages). The worker uses `ask` for everything (no confirmation needed, gets answers inline). This means the worker can operate fully autonomously without needing `autoSend: true`.
+The planner typically uses `send`. If you prefer manual approval for outgoing non-reply messages, turn on `confirmSend: true`. The worker uses `ask` for everything (no confirmation needed, gets answers inline), so it can operate autonomously either way.
 
 ## Tool Reference
 
@@ -193,7 +193,7 @@ The planner typically uses `send` (user reviews outgoing messages). The worker u
 
 **`list`** — Returns all active intercom-connected sessions (excluding self) with name, working directory, model, and status.
 
-**`send`** — Sends a message to the specified session. In interactive sessions with UI available, it shows a confirmation dialog by default (disable with `autoSend: true` in config). Replies that include `replyTo` skip confirmation. Returns delivery confirmation.
+**`send`** — Sends a message to the specified session. By default it sends immediately, including in interactive sessions. Set `confirmSend: true` in config if you want a confirmation dialog for non-reply sends. Replies that include `replyTo` skip confirmation. Returns delivery confirmation.
 
 **`ask`** — Sends a message and waits for the recipient to reply (10-minute timeout). The reply is returned as the tool result. No confirmation dialog. Use this when the agent needs the answer to continue working.
 
@@ -214,7 +214,7 @@ Create `~/.pi/agent/intercom/config.json`:
 
 ```json
 {
-  "autoSend": false,
+  "confirmSend": false,
   "enabled": true,
   "replyHint": true,
   "status": "researching"
@@ -223,7 +223,7 @@ Create `~/.pi/agent/intercom/config.json`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `autoSend` | false | Skip the confirmation dialog when agent sends non-reply messages from an interactive session with UI |
+| `confirmSend` | false | Show a confirmation dialog before non-reply sends from an interactive session with UI |
 | `enabled` | true | Enable/disable intercom entirely |
 | `replyHint` | true | Include reply instruction in incoming messages |
 | `status` | — | Custom status shown to other sessions |
