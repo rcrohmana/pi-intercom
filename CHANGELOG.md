@@ -7,6 +7,9 @@ All notable changes to the `pi-intercom` extension will be documented in this fi
 ### Fixed
 - Declared the extension entry in `package.json` via `pi.extensions` so `pi install npm:pi-intercom` can discover and load the extension from the npm package.
 
+### Changed
+- Added `pi-package` package metadata and peer dependency declarations for Pi runtime packages used by the extension.
+
 ## [0.1.6] - 2026-04-13
 
 ### Changed

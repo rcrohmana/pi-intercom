@@ -4,10 +4,17 @@
   "license": "MIT",
   "type": "module",
   "main": "index.ts",
+  "keywords": [
+    "pi-package"
+  ],
   "pi": {
     "extensions": [
       "./index.ts"
     ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
   },
   "dependencies": {
     "tsx": "^4.20.0"
