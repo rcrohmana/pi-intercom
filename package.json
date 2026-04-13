@@ -4,6 +4,11 @@
   "license": "MIT",
   "type": "module",
   "main": "index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
   "dependencies": {
     "tsx": "^4.20.0"
   }
