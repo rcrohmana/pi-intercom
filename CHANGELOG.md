@@ -4,6 +4,8 @@ All notable changes to the `pi-intercom` extension will be documented in this fi
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-04-17
+
 ### Fixed
 - Declared the extension entry in `package.json` via `pi.extensions` so `pi install npm:pi-intercom` can discover and load the extension from the npm package.
 
