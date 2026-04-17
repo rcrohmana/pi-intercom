@@ -4,6 +4,8 @@ All notable changes to the `pi-intercom` extension will be documented in this fi
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-04-17
+
 ### Fixed
 - Broker startup now works on Windows by launching the local `tsx` CLI through a hidden `wscript.exe` helper without treating the helper's expected early exit as a broker failure.
 
