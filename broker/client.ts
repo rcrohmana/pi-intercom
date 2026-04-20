@@ -124,14 +124,7 @@ export class IntercomClient extends EventEmitter {
 
   isConnected(): boolean {
     const socket = this.socket;
-    return Boolean(
-      socket
-      && this._sessionId
-      && !this.disconnecting
-      && !socket.destroyed
-      && !socket.writableEnded
-      && socket.writable,
-    );
+    return Boolean(socket && this._sessionId && !this.disconnecting && !socket.destroyed && !socket.writableEnded && socket.writable);
   }
 
   private requireActiveSocket(): net.Socket {

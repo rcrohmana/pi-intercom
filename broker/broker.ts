@@ -229,10 +229,18 @@ class IntercomBroker {
 
         const targets = this.findSessions(clientMessage.to);
         if (targets.length === 1) {
-          const from = this.sessions.get(currentId)!.info;
+          const fromSession = this.sessions.get(currentId);
+          if (!fromSession) {
+            writeMessage(socket, {
+              type: "delivery_failed",
+              messageId: message.id,
+              reason: "Sender session not found",
+            });
+            break;
+          }
           writeMessage(targets[0].socket, {
             type: "message",
-            from,
+            from: fromSession.info,
             message,
           });
           writeMessage(socket, { type: "delivered", messageId: message.id });

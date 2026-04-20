@@ -181,11 +181,11 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     bodyText: string;
   }, delivery: "trigger" | "followUp" | "followUpTrigger"): void {
     const senderDisplay = entry.from.name || entry.from.id.slice(0, 8);
-    const replyHint = entry.replyCommand ? ` — reply: ${entry.replyCommand}` : "";
+    const replyInstruction = entry.replyCommand ? `\n\nTo reply, use the intercom tool: ${entry.replyCommand}` : "";
     pi.sendMessage(
       {
         customType: "intercom_message",
-        content: `**📨 From ${senderDisplay}** (${entry.from.cwd})${replyHint}\n\n${entry.bodyText}`,
+        content: `**📨 From ${senderDisplay}** (${entry.from.cwd})${replyInstruction}\n\n${entry.bodyText}`,
         display: true,
         details: entry,
       },

@@ -4,6 +4,28 @@ All notable changes to the `pi-intercom` extension will be documented in this fi
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-04-20
+
+### Added
+- Bundled `pi-intercom` skill with coordination patterns, error handling, constraints, and optional cmux/tmux peer-session spawning for visible multi-session workflows.
+- `pi.skills` manifest in `package.json` so `pi install` loads the skill automatically.
+- AGENTS.md snippet in README recommending a project-level coordination hint for agents.
+- Attachments example to Quick Start section in README.
+
+### Changed
+- Incoming message reply hints now say "To reply, use the intercom tool:" instead of "— reply:" so agents are more likely to use the intercom tool instead of replying inline.
+- `ask` action now documents the one-at-a-time constraint in the Tool Reference.
+- `status` action now clarifies that the session count includes the current session.
+- Broker startup no longer uses a non-null assertion for sender session lookup in the `send` handler — missing sessions now produce a `delivery_failed` response instead of a crash.
+- Broker spawn lock error handling tightened to check `instanceof Error` before accessing `.code`.
+- Broker PID parsing now guards against `NaN` from corrupt PID files.
+- `isConnected()` readability cleanup in `IntercomClient`.
+- README file structure updated to include `broker/paths.ts`, test files, and `skills/` directory.
+- README runtime files section now clarifies that `broker.sock` is macOS/Linux only; Windows uses a named pipe.
+- README mermaid diagram changed "Unix Socket" to "Local Socket/Pipe" for cross-platform accuracy.
+- README broker limitation rephrased from "must be running" to "auto-spawns on first use and exits when idle."
+- README Install section now mentions that the bundled skill is registered on startup.
+
 ## [0.1.10] - 2026-04-17
 
 ### Fixed

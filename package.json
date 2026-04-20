@@ -1,9 +1,17 @@
 {
   "name": "pi-intercom",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "license": "MIT",
   "type": "module",
   "main": "index.ts",
+  "files": [
+    "index.ts",
+    "types.ts",
+    "config.ts",
+    "broker/**/*.ts",
+    "ui/**/*.ts",
+    "skills/**/*"
+  ],
   "scripts": {
     "test": "tsx --test broker/paths.test.ts broker/spawn.test.ts"
   },
@@ -13,6 +21,9 @@
   "pi": {
     "extensions": [
       "./index.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "peerDependencies": {

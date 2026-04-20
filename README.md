@@ -32,7 +32,21 @@ Each pi session that has `pi-intercom` loaded and enabled connects to a tiny loc
 pi install npm:pi-intercom
 ```
 
-Then restart Pi. The extension auto-connects to the broker on startup.
+Then restart Pi. The extension auto-connects to the broker on startup and registers the bundled `pi-intercom` skill for common coordination patterns.
+
+**Recommended:** Add this snippet to your project's `AGENTS.md` to help agents understand when to coordinate across sessions:
+
+```xml
+<pi-intercom>
+Coordinate with other local pi sessions on related codebases. Use `/skill:pi-intercom` for patterns.
+
+**When:** Same codebase (parallel work), reference codebase (consulting patterns), related repos (shared libraries).
+
+**Not when:** Unrelated codebases, trivial questions, or when you can proceed independently.
+
+**Principle:** Prefer `send` for notifications; `ask` only when blocked waiting for input.
+</pi-intercom>
+```
 
 A session becomes intercom-connected when all of these are true:
 - the `pi-intercom` extension is installed and loaded in that session
@@ -56,7 +70,7 @@ Press **Alt+M** or type `/intercom` to open the session list overlay:
 
 ### From the Agent
 
-The agent can list sessions and send messages using the `intercom` tool:
+The agent can list sessions and send messages using the `intercom` tool. For common patterns like planner-worker delegation, the bundled `pi-intercom` skill provides copy-paste ready examples:
 
 ```typescript
 // List active sessions
@@ -71,6 +85,19 @@ intercom({ action: "send", to: "research", message: "Check if UserService.valida
 // Check connection status
 intercom({ action: "status" })
 // → Connected: Yes, Session ID: abc123, Active sessions: 3
+
+// Send with attachments (code snippets, files, or context)
+intercom({
+  action: "send",
+  to: "worker",
+  message: "Here's the fix:",
+  attachments: [{
+    type: "snippet",
+    name: "auth.ts",
+    language: "typescript",
+    content: "function validate(user: User) { ... }"
+  }]
+})
 ```
 
 ### Receiving Messages
@@ -78,13 +105,15 @@ intercom({ action: "status" })
 When a message arrives, it appears inline in your chat with the sender's info and a reply hint:
 
 ```
-**📨 From research** (~/projects/api) — reply: intercom({ action: "send", to: "550e8400-e29b-41d4-a716-446655440000", replyTo: "c1f7...", message: "..." })
+**📨 From research** (~/projects/api)
+
+To reply, use the intercom tool: intercom({ action: "send", to: "550e8400-e29b-41d4-a716-446655440000", replyTo: "c1f7...", message: "..." })
 
 Found the issue — UserService.validate() doesn't check for null input.
 See auth.ts:142-156.
 ```
 
-The reply hint (enabled by default) shows the exact `intercom()` call to respond, including the sender's session ID as `to` and the original message ID as `replyTo`, so `ask` can match the answer precisely. For `ask` to resolve reliably, replies should include that `replyTo` value. The message triggers a new turn, so the agent can respond or act on it immediately. If the message includes attachments, their content is also included in the agent-visible message body. Messages are rendered inline in the chat and also written to Pi session history as extension entries.
+The reply hint (enabled by default) tells the receiving agent exactly how to respond using the `intercom` tool, including the sender's session ID as `to` and the original message ID as `replyTo`. This is critical for `ask` to resolve reliably — replies must include the `replyTo` value so the waiting caller can match the response. The message triggers a new turn, so the agent can respond or act on it immediately. If the message includes attachments, their content is also included in the agent-visible message body. Messages are rendered inline in the chat and also written to Pi session history as extension entries.
 
 ## Workflow: Planner-Worker Coordination
 
@@ -164,7 +193,9 @@ intercom({
 When `replyHint` is enabled (the default), incoming messages include the exact `intercom()` call to respond:
 
 ```
-**📨 From planner** (~/projects/api) — reply: intercom({ action: "send", to: "550e8400-e29b-41d4-a716-446655440000", replyTo: "c1f7...", message: "..." })
+**📨 From planner** (~/projects/api)
+
+To reply, use the intercom tool: intercom({ action: "send", to: "550e8400-e29b-41d4-a716-446655440000", replyTo: "c1f7...", message: "..." )
 
 Only GET/PUT/DELETE — never POST. Max 3 retries with exponential backoff starting at 100ms.
 ```
@@ -197,9 +228,9 @@ The planner typically uses `send`. If you prefer manual approval for outgoing no
 
 **`send`** — Sends a message to the specified session. By default it sends immediately, including in interactive sessions. Set `confirmSend: true` in config if you want a confirmation dialog for non-reply sends. Replies that include `replyTo` skip confirmation. Returns delivery confirmation.
 
-**`ask`** — Sends a message and waits for the recipient to reply (10-minute timeout). The reply is returned as the tool result. No confirmation dialog. Use this when the agent needs the answer to continue working.
+**`ask`** — Sends a message and waits for the recipient to reply (10-minute timeout). The reply is returned as the tool result. No confirmation dialog. Only one pending `ask` is allowed per session at a time. Use this when the agent needs the answer to continue working.
 
-**`status`** — Shows connection status, session ID, and count of active sessions.
+**`status`** — Shows connection status, session ID, and total count of active sessions (including the current session).
 
 ## Keyboard Shortcuts
 
@@ -251,9 +282,9 @@ graph TB
         B5[UI overlays]
     end
 
-    A1 <-->|Unix Socket| B1
+    A1 <-->|Local Socket/Pipe| B1
     B1 --- B2
-    B2 <-->|Unix Socket| B3
+    B2 <-->|Local Socket/Pipe| B3
 ```
 
 The broker is a standalone TypeScript process that manages session registration and message routing. It auto-spawns when the first intercom-enabled session needs it and exits after 5 seconds when the last connected session disconnects. Clients now reconnect automatically if the broker disappears and later comes back.
@@ -261,7 +292,7 @@ The broker is a standalone TypeScript process that manages session registration 
 Messages use length-prefixed JSON over a local socket/pipe transport (4-byte length + JSON payload) to handle fragmentation properly. The protocol includes request correlation for session listing, explicit delivery failures, and validation for malformed or out-of-order messages.
 
 Runtime files live at `~/.pi/agent/intercom/`:
-- `broker.sock` — Unix socket for communication on macOS and Linux
+- `broker.sock` — Unix domain socket for communication (macOS/Linux only; Windows uses a named pipe instead)
 - `broker-launch.vbs` — Windows helper script used to launch the broker without a console window
 - `broker.pid` — Broker process ID
 - `config.json` — User configuration
@@ -291,18 +322,24 @@ Use pi-messenger for multi-agent swarms working on a shared task. Use pi-interco
 ```
 ~/.pi/agent/extensions/pi-intercom/
 ├── package.json
-├── index.ts           # Extension entry point
-├── types.ts           # SessionInfo, Message, protocol types
-├── config.ts          # Config loading
+├── index.ts              # Extension entry point
+├── types.ts              # SessionInfo, Message, protocol types
+├── config.ts             # Config loading
 ├── broker/
-│   ├── broker.ts      # Broker process
-│   ├── client.ts      # IntercomClient class
-│   ├── framing.ts     # Length-prefixed JSON protocol
-│   └── spawn.ts       # Auto-spawn logic with lock file
-└── ui/
-    ├── session-list.ts    # Session selection overlay
-    ├── compose.ts         # Message composition overlay
-    └── inline-message.ts  # Received message display
+│   ├── broker.ts         # Broker process
+│   ├── client.ts         # IntercomClient class
+│   ├── framing.ts        # Length-prefixed JSON protocol
+│   ├── paths.ts          # Platform-specific socket/pipe paths
+│   ├── spawn.ts          # Auto-spawn logic with lock file
+│   ├── spawn.test.ts     # Broker spawn tests
+│   └── paths.test.ts     # Path resolution tests
+├── ui/
+│   ├── session-list.ts   # Session selection overlay
+│   ├── compose.ts        # Message composition overlay
+│   └── inline-message.ts # Received message display
+└── skills/
+    └── pi-intercom/
+        └── SKILL.md      # Bundled skill for common patterns
 ```
 
 ## Limitations
@@ -311,4 +348,4 @@ Use pi-messenger for multi-agent swarms working on a shared task. Use pi-interco
 - **No dedicated intercom log** — Messages are kept in Pi session history, but there is no separate intercom transcript or inbox
 - **No attachments UI** — `file`, `snippet`, and `context` attachments are supported in the protocol, but not in the compose overlay
 - **Only connected sessions appear** — The list shows Pi sessions that have loaded `pi-intercom` and successfully registered with the broker, not every open Pi process on the machine
-- **Broker must be running** — It auto-spawns on first use, and sessions now try to reconnect automatically if the broker disappears after connect
+- **Broker lifecycle** — The broker auto-spawns on first use and exits when idle; sessions reconnect automatically if the broker restarts

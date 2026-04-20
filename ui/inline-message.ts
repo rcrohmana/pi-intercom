@@ -43,7 +43,7 @@ export class InlineMessageComponent implements Component {
 
     if (this.replyCommand) {
       lines.push(this.theme.fg("accent", `│${" ".repeat(bodyWidth)}│`));
-      const replyLines = wrapTextWithAnsi(this.theme.fg("dim", ` ↩ Reply: ${this.replyCommand}`), bodyWidth);
+      const replyLines = wrapTextWithAnsi(this.theme.fg("dim", ` ↩ To reply: ${this.replyCommand}`), bodyWidth);
       for (const line of replyLines) {
         const text = truncateToWidth(line, bodyWidth, "");
         const padding = Math.max(0, bodyWidth - visibleWidth(text));

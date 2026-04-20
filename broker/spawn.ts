@@ -186,6 +186,7 @@ async function isBrokerRunning(): Promise<boolean> {
 
   try {
     const pid = parseInt(readFileSync(BROKER_PID, "utf-8").trim(), 10);
+    if (!Number.isFinite(pid)) return false;
     process.kill(pid, 0);
     return checkSocketConnectable();
   } catch {
@@ -227,8 +228,7 @@ function acquireSpawnLock(): boolean {
       writeFileSync(BROKER_SPAWN_LOCK, `${process.pid}\n${Date.now()}\n`, { flag: "wx" });
       return true;
     } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code !== "EEXIST") {
+      if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "EEXIST") {
         throw error;
       }
       if (isSpawnLockStale()) {
