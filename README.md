@@ -20,7 +20,7 @@ Sometimes you're running multiple pi sessions — one researching, one executing
 
 Unlike pi-messenger (a shared chat room for multi-agent swarms), pi-intercom is for targeted 1:1 communication where you pick the recipient.
 
-Pi-intercom also integrates well with [pi-subagents](https://github.com/nicobailon/pi-subagents): delegated child agents get a child-only `contact_supervisor` tool when `pi-subagents` supplies bridge metadata. Use `reason: "need_decision"` for blocking clarification and `reason: "progress_update"` for meaningful plan-changing updates. Normal sessions only see the regular `intercom` tool.
+Pi-intercom also integrates well with [pi-subagents](https://github.com/nicobailon/pi-subagents): delegated child agents get a child-only `contact_supervisor` tool when `pi-subagents` supplies bridge metadata. Use `reason: "need_decision"` for blocking clarification, `reason: "interview_request"` for multiple structured supervisor answers, and `reason: "progress_update"` for meaningful plan-changing updates. Normal sessions only see the regular `intercom` tool.
 
 ## In One Minute
 
@@ -227,11 +227,12 @@ This workflow requires [`pi-subagents`](https://github.com/nicobailon/pi-subagen
 
 If any are missing, the session falls back to the regular `intercom` tool.
 
-### Two Reasons
+### Three Reasons
 
 | Reason | Behavior | Use When |
 |--------|----------|----------|
 | `need_decision` | Sends an ask and blocks until the supervisor replies (10-minute timeout) | The subagent is blocked, uncertain, needs approval, or faces a product/API/scope decision |
+| `interview_request` | Sends structured questions and blocks until the supervisor replies | The subagent needs multiple machine-readable answers from the supervisor in one exchange |
 | `progress_update` | Fire-and-forget update to the supervisor | Meaningful progress or unexpected discoveries that change the plan |
 
 Do not use `contact_supervisor` for routine completion handoffs. Return the final subagent result normally through `pi-subagents`.
@@ -244,6 +245,23 @@ contact_supervisor({
   message: "The auth service returns 403 instead of 401 for expired tokens. Should I treat 403 as a re-auth trigger or a hard failure?"
 })
 // → Reply from supervisor: Treat 403 as re-auth trigger. Update the token refresh logic.
+```
+
+### Example: Structured Supervisor Interview
+
+```typescript
+contact_supervisor({
+  reason: "interview_request",
+  message: "Please answer these before I continue the migration.",
+  interview: {
+    title: "API migration choices",
+    questions: [
+      { id: "api", type: "single", question: "Which API should I target?", options: ["Stable API", "Experimental API"] },
+      { id: "constraints", type: "text", question: "What constraints should I preserve?" }
+    ]
+  }
+})
+// → Reply from supervisor: { "responses": [{ "id": "api", "value": "Stable API" }, ...] }
 ```
 
 ### Example: Progress Update
@@ -273,6 +291,19 @@ Which API should I use?
 
 Reply hints work the same as regular `intercom` ask/reply flows. The supervisor can reply with `intercom({ action: "reply", message: "..." })` and the subagent receives the answer as the tool result.
 
+For `interview_request`, the supervisor message includes the structured questions plus a fenced JSON answer example using this stable shape:
+
+```json
+{
+  "responses": [
+    { "id": "api", "value": "Stable API" },
+    { "id": "constraints", "value": "Keep the public error shape unchanged." }
+  ]
+}
+```
+
+The supervisor can reply with plain JSON or a fenced `json` block. If the reply matches the `{ "responses": [...] }` shape and references valid question ids/options, the child tool result includes it in `details.structuredReply` while still showing the raw reply text.
+
 ## Tool Reference
 
 ### intercom
@@ -291,10 +322,13 @@ Only registered in sessions where `pi-subagents` supplied the required child bri
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `reason` | string | `"need_decision"` (blocking, waits for reply) or `"progress_update"` (fire-and-forget) |
-| `message` | string | The decision request or progress update |
+| `reason` | string | `"need_decision"` (blocking), `"interview_request"` (blocking structured questions), or `"progress_update"` (fire-and-forget) |
+| `message` | string | The decision request, optional interview note, or progress update |
+| `interview` | object | Required for `interview_request`: `{ title?, description?, questions: [...] }` |
 
 **`need_decision`** — Sends a formatted ask to the supervisor and blocks until it replies (10-minute timeout). The reply comes back as the tool result. Includes run metadata in the message so the supervisor knows which subagent is asking.
+
+**`interview_request`** — Sends a formatted, agent-readable interview to the supervisor and blocks until it replies. Questions use a local pi-interview-like shape: `{ id, type, question, options?, context? }` where `type` is `single`, `multi`, `text`, `image`, or `info`. `info` questions are context-only and do not need responses. The supervisor reply should be JSON with `{ "responses": [{ "id": "...", "value": ... }] }`. Parsed JSON replies are returned in `details.structuredReply`.
 
 **`progress_update`** — Sends a non-blocking update to the supervisor. Returns immediately after delivery. Use only for meaningful progress or unexpected discoveries that change the plan.
 

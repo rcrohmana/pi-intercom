@@ -31,6 +31,25 @@ interface ChildOrchestratorMetadata {
   sessionName?: string;
 }
 
+type ContactSupervisorReason = "need_decision" | "progress_update" | "interview_request";
+
+interface SupervisorInterviewQuestion extends Record<string, unknown> {
+  id: string;
+  type: "single" | "multi" | "text" | "image" | "info";
+  question: string;
+  options?: unknown[];
+}
+
+interface SupervisorInterviewRequest extends Record<string, unknown> {
+  title?: string;
+  description?: string;
+  questions: SupervisorInterviewQuestion[];
+}
+
+interface SupervisorInterviewReply {
+  responses: Array<{ id: string; value: unknown }>;
+}
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -67,9 +86,14 @@ function readChildOrchestratorMetadata(): ChildOrchestratorMetadata | null {
     ...(sessionName ? { sessionName } : {}),
   };
 }
-function formatChildOrchestratorMessage(kind: "ask" | "update", metadata: ChildOrchestratorMetadata, message: string): string {
+function formatChildOrchestratorMessage(kind: "ask" | "update" | "interview", metadata: ChildOrchestratorMetadata, message: string): string {
+  const heading = kind === "ask"
+    ? "Subagent needs a supervisor decision."
+    : kind === "interview"
+      ? "Subagent requests a structured supervisor interview."
+      : "Subagent progress update.";
   return [
-    kind === "ask" ? "Subagent needs a supervisor decision." : "Subagent progress update.",
+    heading,
     `Run: ${metadata.runId}`,
     `Agent: ${metadata.agent}`,
     `Child index: ${metadata.index}`,
@@ -77,6 +101,243 @@ function formatChildOrchestratorMessage(kind: "ask" | "update", metadata: ChildO
     "",
     message,
   ].filter((line): line is string => line !== undefined).join("\n");
+}
+
+function validateSupervisorInterviewRequest(input: unknown): { ok: true; interview: SupervisorInterviewRequest } | { ok: false; error: string } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return { ok: false, error: "interview must be an object with a questions array" };
+  }
+
+  const raw = input as Record<string, unknown>;
+  if (raw.title !== undefined && typeof raw.title !== "string") {
+    return { ok: false, error: "interview.title must be a string when provided" };
+  }
+  if (raw.description !== undefined && typeof raw.description !== "string") {
+    return { ok: false, error: "interview.description must be a string when provided" };
+  }
+  if (!Array.isArray(raw.questions) || raw.questions.length === 0) {
+    return { ok: false, error: "interview.questions must be a non-empty array" };
+  }
+
+  const validTypes = new Set(["single", "multi", "text", "image", "info"]);
+  const ids = new Set<string>();
+  const questions: SupervisorInterviewQuestion[] = [];
+
+  for (let index = 0; index < raw.questions.length; index++) {
+    const questionInput = raw.questions[index];
+    if (!questionInput || typeof questionInput !== "object" || Array.isArray(questionInput)) {
+      return { ok: false, error: `interview.questions[${index}] must be an object` };
+    }
+    const question = questionInput as Record<string, unknown>;
+    if (typeof question.id !== "string" || question.id.trim() === "") {
+      return { ok: false, error: `interview.questions[${index}].id must be a non-empty string` };
+    }
+    const id = question.id.trim();
+    if (ids.has(id)) {
+      return { ok: false, error: `interview question id must be unique: ${id}` };
+    }
+    ids.add(id);
+
+    if (typeof question.type !== "string" || !validTypes.has(question.type)) {
+      return { ok: false, error: `interview.questions[${index}].type must be one of: single, multi, text, image, info` };
+    }
+    if (typeof question.question !== "string" || question.question.trim() === "") {
+      return { ok: false, error: `interview.questions[${index}].question must be a non-empty string` };
+    }
+    if (question.context !== undefined && typeof question.context !== "string") {
+      return { ok: false, error: `interview.questions[${index}].context must be a string when provided` };
+    }
+    let options: unknown[] | undefined;
+    if (question.options !== undefined) {
+      if (!Array.isArray(question.options)) {
+        return { ok: false, error: `interview.questions[${index}].options must be an array when provided` };
+      }
+      options = [];
+      for (let optionIndex = 0; optionIndex < question.options.length; optionIndex++) {
+        const option = question.options[optionIndex];
+        if (typeof option === "string") {
+          const label = option.trim();
+          if (!label) {
+            return { ok: false, error: `interview.questions[${index}].options[${optionIndex}] must not be empty` };
+          }
+          options.push(label);
+        } else if (!option || typeof option !== "object" || Array.isArray(option) || typeof (option as { label?: unknown }).label !== "string" || (option as { label: string }).label.trim() === "") {
+          return { ok: false, error: `interview.questions[${index}].options[${optionIndex}] must be a non-empty string or an object with a non-empty label` };
+        } else {
+          options.push({ ...option, label: (option as { label: string }).label.trim() });
+        }
+      }
+    }
+    if ((question.type === "single" || question.type === "multi") && (!options || options.length === 0)) {
+      return { ok: false, error: `interview.questions[${index}].options must be a non-empty array for ${question.type} questions` };
+    }
+    if (question.type !== "single" && question.type !== "multi" && options) {
+      return { ok: false, error: `interview.questions[${index}].options is only valid for single and multi questions` };
+    }
+
+    questions.push({
+      ...question,
+      id,
+      type: question.type as SupervisorInterviewQuestion["type"],
+      question: question.question.trim(),
+      ...(options ? { options } : {}),
+    });
+  }
+
+  return {
+    ok: true,
+    interview: {
+      ...raw,
+      ...(typeof raw.title === "string" ? { title: raw.title.trim() } : {}),
+      ...(typeof raw.description === "string" ? { description: raw.description.trim() } : {}),
+      questions,
+    },
+  };
+}
+
+function interviewOptionLabel(option: unknown): string {
+  return typeof option === "string" ? option : (option as { label: string }).label;
+}
+
+function interviewExampleValue(question: SupervisorInterviewQuestion): unknown {
+  if (question.type === "multi") {
+    return question.options?.slice(0, 2).map(interviewOptionLabel) ?? [];
+  }
+  if (question.type === "single") {
+    return question.options?.[0] !== undefined ? interviewOptionLabel(question.options[0]) : "option label";
+  }
+  if (question.type === "image") {
+    return "image/file reference or description";
+  }
+  return "answer text";
+}
+
+function formatSupervisorInterviewRequest(interview: SupervisorInterviewRequest, message?: string): string {
+  const lines: string[] = [];
+  const title = interview.title?.trim();
+  if (title) lines.push(`Interview: ${title}`);
+  const description = interview.description?.trim();
+  if (description) lines.push(description);
+  const note = message?.trim();
+  if (note) lines.push(`Child note: ${note}`);
+  if (lines.length > 0) lines.push("");
+
+  lines.push("Questions:");
+  interview.questions.forEach((question, index) => {
+    lines.push(`${index + 1}. [${question.id}] (${question.type}) ${question.question}`);
+    if (typeof question.context === "string" && question.context.trim()) {
+      lines.push(`   Context: ${question.context.trim()}`);
+    }
+    if (question.options?.length) {
+      lines.push("   Options:");
+      for (const option of question.options) {
+        lines.push(`   - ${interviewOptionLabel(option)}`);
+      }
+    }
+  });
+
+  const responseExample = {
+    responses: interview.questions
+      .filter((question) => question.type !== "info")
+      .map((question) => ({
+        id: question.id,
+        value: interviewExampleValue(question),
+      })),
+  };
+
+  lines.push(
+    "",
+    "Supervisor reply instructions:",
+    "Reply with plain JSON or a fenced ```json block using this stable shape. Use the question ids exactly. Info questions are context-only and do not need responses. For single questions, value is one option label. For multi questions, value is an array of option labels. For text/image questions, value is a string unless the question asks otherwise.",
+    "",
+    "```json",
+    JSON.stringify(responseExample, null, 2),
+    "```",
+  );
+
+  return lines.join("\n");
+}
+
+function validateSupervisorInterviewReply(value: unknown, interview: SupervisorInterviewRequest): SupervisorInterviewReply {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("reply JSON must be an object with a responses array");
+  }
+
+  const responsesInput = (value as Record<string, unknown>).responses;
+  if (!Array.isArray(responsesInput)) {
+    throw new Error("reply JSON must include a responses array");
+  }
+
+  const questionById = new Map(interview.questions
+    .filter((question) => question.type !== "info")
+    .map((question) => [question.id, question]));
+  const seenIds = new Set<string>();
+  const responses: SupervisorInterviewReply["responses"] = [];
+
+  for (let index = 0; index < responsesInput.length; index++) {
+    const response = responsesInput[index];
+    if (!response || typeof response !== "object" || Array.isArray(response)) {
+      throw new Error(`responses[${index}] must be an object`);
+    }
+
+    const raw = response as Record<string, unknown>;
+    if (typeof raw.id !== "string" || raw.id.trim() === "") {
+      throw new Error(`responses[${index}].id must be a non-empty string`);
+    }
+    const id = raw.id.trim();
+    const question = questionById.get(id);
+    if (!question) {
+      throw new Error(`responses[${index}].id must match a non-info interview question id`);
+    }
+    if (seenIds.has(id)) {
+      throw new Error(`responses[${index}].id is duplicated: ${id}`);
+    }
+    seenIds.add(id);
+    if (!Object.hasOwn(raw, "value")) {
+      throw new Error(`responses[${index}].value is required`);
+    }
+
+    const value = raw.value;
+    if (question.type === "single") {
+      if (typeof value !== "string") throw new Error(`responses[${index}].value must be a string for single questions`);
+      const optionLabels = new Set(question.options?.map(interviewOptionLabel));
+      if (!optionLabels.has(value.trim())) throw new Error(`responses[${index}].value must match one of the question options`);
+      responses.push({ id, value: value.trim() });
+      continue;
+    }
+
+    if (question.type === "multi") {
+      if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+        throw new Error(`responses[${index}].value must be an array of strings for multi questions`);
+      }
+      const optionLabels = new Set(question.options?.map(interviewOptionLabel));
+      const selected = value.map((item) => item.trim());
+      const invalid = selected.find((item) => !optionLabels.has(item));
+      if (invalid) throw new Error(`responses[${index}].value contains an option that is not in the question options: ${invalid}`);
+      responses.push({ id, value: selected });
+      continue;
+    }
+
+    if (typeof value !== "string") {
+      throw new Error(`responses[${index}].value must be a string for ${question.type} questions`);
+    }
+    responses.push({ id, value });
+  }
+
+  return { responses };
+}
+
+function parseStructuredSupervisorReply(text: string, interview: SupervisorInterviewRequest): { value?: SupervisorInterviewReply; error?: string } | undefined {
+  const fencedMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = (fencedMatch?.[1] ?? text).trim();
+  if (!candidate.startsWith("{") && !candidate.startsWith("[")) {
+    return undefined;
+  }
+  try {
+    return { value: validateSupervisorInterviewReply(JSON.parse(candidate), interview) };
+  } catch (error) {
+    return { error: getErrorMessage(error) };
+  }
 }
 function duplicateSessionNames(sessions: SessionInfo[]): Set<string> {
   return new Set(
@@ -309,6 +570,23 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     const entry = { from, message, replyCommand, bodyText };
     void (async () => {
       if (!ctx.isIdle()) {
+        if (!ctx.hasUI) {
+          const activeClient = client;
+          if (!message.replyTo && activeClient?.isConnected()) {
+            try {
+              const result = await activeClient.send(from.id, {
+                text: "This agent is running in non-interactive mode and cannot respond to intercom messages while it is working. It will continue its current task and exit when done.",
+                replyTo: message.id,
+              });
+              if (result.delivered) {
+                replyTracker.markReplied(message.id);
+              }
+            } catch {
+              // Best-effort reply; keep the busy non-interactive session running either way.
+            }
+          }
+          return;
+        }
         const detached = await requestGracefulDetach();
         if (detached) {
           sendIncomingMessage(entry, "trigger");
@@ -613,29 +891,58 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
     pi.registerTool({
       name: "contact_supervisor",
       label: "Contact Supervisor",
-      description: "Subagent-only tool for contacting the supervisor agent that delegated this task. Use need_decision when blocked, uncertain, needing approval, or facing a product/API/scope decision before continuing; this waits for the supervisor's reply. Use progress_update only for meaningful progress or unexpected discoveries that change the plan; this does not wait for a reply. Do not use for routine completion handoffs.",
-      promptSnippet: "Subagent-only: contact the supervisor for decisions or meaningful plan-changing updates. Do not use for routine completion handoffs.",
+      description: "Subagent-only tool for contacting the supervisor agent that delegated this task. Use need_decision when blocked, uncertain, needing approval, or facing a product/API/scope decision before continuing; this waits for the supervisor's reply. Use interview_request when multiple structured questions need supervisor answers; this also waits for a reply. Use progress_update only for meaningful progress or unexpected discoveries that change the plan; this does not wait for a reply. Do not use for routine completion handoffs.",
+      promptSnippet: "Subagent-only: contact the supervisor for decisions, structured interviews, or meaningful plan-changing updates. Do not use for routine completion handoffs.",
       promptGuidelines: [
         "Use contact_supervisor with reason='need_decision' when a subagent is blocked, uncertain, needs approval, or faces a product/API/scope decision before continuing.",
+        "Use contact_supervisor with reason='interview_request' when the child needs multiple structured answers from the supervisor in one blocking exchange.",
         "Use contact_supervisor with reason='progress_update' only for meaningful progress or unexpected discoveries that change the plan.",
         "Do not use contact_supervisor for routine completion handoffs; return the final subagent result normally.",
       ],
       parameters: Type.Object({
         reason: Type.String({
-          enum: ["need_decision", "progress_update"],
-          description: "Contact reason: 'need_decision' waits for a reply; 'progress_update' sends a non-blocking update",
+          enum: ["need_decision", "progress_update", "interview_request"],
+          description: "Contact reason: 'need_decision' waits for a reply; 'interview_request' sends structured questions and waits for a reply; 'progress_update' sends a non-blocking update",
         }),
-        message: Type.String({
-          description: "Decision request or meaningful progress update for the supervisor",
-        }),
+        message: Type.Optional(Type.String({
+          description: "Decision request, optional interview note, or meaningful progress update for the supervisor",
+        })),
+        interview: Type.Optional(Type.Object({
+          title: Type.Optional(Type.String()),
+          description: Type.Optional(Type.String()),
+          questions: Type.Array(Type.Object({
+            id: Type.String(),
+            type: Type.String({ description: "Question type: single, multi, text, image, or info" }),
+            question: Type.String(),
+            options: Type.Optional(Type.Array(Type.Any())),
+            context: Type.Optional(Type.String()),
+          })),
+        }, { description: "Structured interview request for reason='interview_request'" })),
       }),
       async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-        if (params.reason !== "need_decision" && params.reason !== "progress_update") {
+        const reason = params.reason as ContactSupervisorReason;
+        if (reason !== "need_decision" && reason !== "progress_update" && reason !== "interview_request") {
           return {
-            content: [{ type: "text", text: "Invalid reason. Use 'need_decision' or 'progress_update'." }],
+            content: [{ type: "text", text: "Invalid reason. Use 'need_decision', 'interview_request', or 'progress_update'." }],
             isError: true,
           };
         }
+        if ((reason === "need_decision" || reason === "progress_update") && typeof params.message !== "string") {
+          return {
+            content: [{ type: "text", text: `Missing 'message' parameter for reason '${reason}'.` }],
+            isError: true,
+          };
+        }
+        const interviewValidation = reason === "interview_request"
+          ? validateSupervisorInterviewRequest(params.interview)
+          : undefined;
+        if (interviewValidation?.ok === false) {
+          return {
+            content: [{ type: "text", text: `Invalid interview request: ${interviewValidation.error}` }],
+            isError: true,
+          };
+        }
+        const supervisorInterview = interviewValidation?.ok === true ? interviewValidation.interview : undefined;
 
         let connectedClient: IntercomClient;
         try {
@@ -679,10 +986,11 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
           };
         }
 
-        if (params.reason === "progress_update") {
+        if (reason === "progress_update") {
+          const message = params.message as string;
           try {
             const result = await connectedClient.send(sendTo, {
-              text: formatChildOrchestratorMessage("update", metadata, params.message),
+              text: formatChildOrchestratorMessage("update", metadata, message),
             });
             if (!result.delivered) {
               const errorText = result.reason ?? "Session may not exist or has disconnected.";
@@ -694,7 +1002,7 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
             }
             pi.appendEntry("intercom_sent", {
               to: metadata.orchestratorTarget,
-              message: { text: params.message, reason: params.reason },
+              message: { text: message, reason },
               messageId: result.id,
               timestamp: Date.now(),
               subagent: { runId: metadata.runId, agent: metadata.agent, index: metadata.index },
@@ -734,9 +1042,12 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
               isError: true,
             };
           }
+          const requestText = reason === "interview_request"
+            ? formatChildOrchestratorMessage("interview", metadata, formatSupervisorInterviewRequest(supervisorInterview!, typeof params.message === "string" ? params.message : undefined))
+            : formatChildOrchestratorMessage("ask", metadata, params.message as string);
           const sendResult = await connectedClient.send(sendTo, {
             messageId: questionId,
-            text: formatChildOrchestratorMessage("ask", metadata, params.message),
+            text: requestText,
             expectsReply: true,
           });
           if (!sendResult.delivered) {
@@ -756,7 +1067,11 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
           }
           pi.appendEntry("intercom_sent", {
             to: metadata.orchestratorTarget,
-            message: { text: params.message, reason: params.reason },
+            message: {
+              text: reason === "interview_request" ? requestText : params.message,
+              reason,
+              ...(reason === "interview_request" ? { interview: supervisorInterview } : {}),
+            },
             messageId: sendResult.id,
             timestamp: Date.now(),
             subagent: { runId: metadata.runId, agent: metadata.agent, index: metadata.index },
@@ -766,6 +1081,7 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
           const replyAttachments = replyMessage.content.attachments?.length
             ? formatAttachments(replyMessage.content.attachments)
             : "";
+          const structuredReply = reason === "interview_request" ? parseStructuredSupervisorReply(replyText, supervisorInterview!) : undefined;
           pi.appendEntry("intercom_received", {
             from: metadata.orchestratorTarget,
             message: { text: replyText, attachments: replyMessage.content.attachments },
@@ -776,6 +1092,9 @@ export default function piIntercomExtension(pi: ExtensionAPI) {
           return {
             content: [{ type: "text", text: `**Reply from supervisor:**\n${replyText}${replyAttachments}` }],
             isError: false,
+            ...(structuredReply
+              ? { details: structuredReply.value !== undefined ? { structuredReply: structuredReply.value } : { structuredReplyParseError: structuredReply.error } }
+              : {}),
           };
         } catch (error) {
           rejectReplyWaiter(toError(error));

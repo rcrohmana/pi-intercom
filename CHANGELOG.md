@@ -4,6 +4,14 @@ All notable changes to the `pi-intercom` extension will be documented in this fi
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-02
+
+### Added
+- Added `contact_supervisor` `reason: "interview_request"` for child subagents to send structured supervisor interviews, wait for a reply, and receive parsed JSON replies in tool result details when available.
+
+### Fixed
+- Busy non-interactive sessions now auto-reply to top-level intercom messages instead of aborting and losing the message.
+
 ## [0.4.0] - 2026-05-02
 
 ### Added

@@ -152,11 +152,12 @@ intercom({ action: "reply", message: "Use the stable v2 API." })
 
 This works because `reply` resolves the correct sender and message ID automatically.
 
-**Two types of escalations to expect:**
+**Three types of escalations to expect:**
 
 | Type | What it means | How to respond |
 |------|---------------|----------------|
 | `need_decision` | Subagent is blocked and waiting for your answer. Has a 10-minute timeout. | Reply promptly with a clear decision. If you need more context, ask follow-up questions via `reply`. |
+| `interview_request` | Subagent needs multiple structured answers in one blocking exchange. Has a 10-minute timeout. | Reply with plain JSON or a fenced `json` block using the provided `{ "responses": [...] }` shape. |
 | `progress_update` | Subagent is sharing meaningful progress or a plan-changing discovery. Not blocking. | Read and acknowledge. No reply required unless you want to redirect. |
 
 **When a subagent asks:**
@@ -164,6 +165,17 @@ This works because `reply` resolves the correct sender and message ID automatica
 ```typescript
 // In the turn triggered by the incoming ask:
 intercom({ action: "reply", message: "Use exponential backoff, max 3 retries." })
+```
+
+**When a subagent sends an interview request:**
+
+Read the rendered questions in the incoming message and reply with the exact ids in JSON. `info` questions are context-only and do not need response entries:
+
+```typescript
+intercom({
+  action: "reply",
+  message: "```json\n{\n  \"responses\": [\n    { \"id\": \"api\", \"value\": \"Stable API\" },\n    { \"id\": \"constraints\", \"value\": \"Keep the public error shape unchanged.\" }\n  ]\n}\n```"
+})
 ```
 
 **If you receive multiple pending asks from different subagents:**

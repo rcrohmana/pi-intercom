@@ -85,10 +85,26 @@ async function withChildOrchestratorEnv<T>(metadata: {
   }
 }
 
-function createExtensionHarness(sessionName = "child-worker") {
+interface CapturedToolResult {
+  content: Array<{ type: string; text: string }>;
+  isError: boolean;
+  details?: Record<string, unknown>;
+}
+
+interface CapturedTool {
+  name: string;
+  parameters?: unknown;
+  execute: (toolCallId: string, params: Record<string, unknown>, signal: AbortSignal, onUpdate: unknown, ctx: unknown) => Promise<CapturedToolResult>;
+}
+
+function createExtensionHarness(sessionName = "child-worker", options: {
+  abort?: () => void;
+  hasUI?: boolean;
+  isIdle?: () => boolean;
+} = {}) {
   const events = new EventEmitter();
   const lifecycleHandlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
-  const tools: Array<{ name: string; execute: (...args: any[]) => Promise<any> }> = [];
+  const tools: CapturedTool[] = [];
   const entries: Array<{ type: string; data: unknown }> = [];
   const pi = {
     getSessionName: () => sessionName,
@@ -105,7 +121,7 @@ function createExtensionHarness(sessionName = "child-worker") {
       lifecycleHandlers.set(event, handlers);
     },
     registerMessageRenderer: () => undefined,
-    registerTool: (tool: { name: string; execute: (...args: any[]) => Promise<any> }) => {
+    registerTool: (tool: CapturedTool) => {
       tools.push(tool);
     },
     registerCommand: () => undefined,
@@ -117,8 +133,9 @@ function createExtensionHarness(sessionName = "child-worker") {
     cwd: repoDir,
     model: { id: "child-model" },
     sessionManager: { getSessionId: () => "session-child-test" },
-    isIdle: () => true,
-    hasUI: false,
+    isIdle: options.isIdle ?? (() => true),
+    hasUI: options.hasUI ?? false,
+    abort: options.abort ?? (() => undefined),
   };
   return {
     pi,
@@ -179,18 +196,61 @@ async function setupClients() {
   }
 }
 
-function waitForReply(client: InstanceType<typeof IntercomClient>, replyTo: string): Promise<{ from: SessionInfo; message: Message; }> {
-  return new Promise((resolve) => {
+function waitForReply(client: InstanceType<typeof IntercomClient>, replyTo: string, timeoutMs = 5000): Promise<{ from: SessionInfo; message: Message; }> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      client.off("message", handler);
+      reject(new Error(`Timed out waiting for reply to ${replyTo}`));
+    }, timeoutMs);
     const handler = (from: SessionInfo, message: Message) => {
       if (message.replyTo !== replyTo) {
         return;
       }
+      clearTimeout(timeout);
       client.off("message", handler);
       resolve({ from, message });
     };
     client.on("message", handler);
   });
 }
+
+test("busy non-interactive sessions auto-reply to top-level asks without aborting", { concurrency: false }, async () => {
+  const { default: piIntercomExtension } = await import("./index.ts");
+  const { planner, cleanup } = await setupClients();
+  let abortCount = 0;
+  const harness = createExtensionHarness("pipe-worker", {
+    abort: () => { abortCount += 1; },
+    hasUI: false,
+    isIdle: () => false,
+  });
+
+  try {
+    piIntercomExtension(harness.pi as never);
+    await harness.emitLifecycle("session_start");
+
+    const sessions = await planner.listSessions();
+    const target = sessions.find((session) => session.name === "pipe-worker");
+    assert.ok(target, "pipe-worker should register with intercom");
+
+    const askId = "pipe-mode-ask";
+    const replyPromise = waitForReply(planner, askId, 1000);
+    const delivered = await planner.send(target.id, {
+      messageId: askId,
+      text: "Can you respond while busy?",
+      expectsReply: true,
+    });
+    assert.equal(delivered.delivered, true);
+
+    const reply = await replyPromise;
+    assert.equal(reply.message.replyTo, askId);
+    assert.match(reply.message.content.text, /non-interactive|cannot respond/i);
+    assert.equal(abortCount, 0);
+
+  } finally {
+    await harness.emitLifecycle("session_shutdown");
+    await cleanup();
+  }
+});
 
 test("supervisor tool registers only when child metadata is present", async () => {
   const { default: piIntercomExtension } = await import("./index.ts");
@@ -211,6 +271,9 @@ test("supervisor tool registers only when child metadata is present", async () =
     const harness = createExtensionHarness();
     piIntercomExtension(harness.pi as never);
     assert.deepEqual(harness.tools.map((tool) => tool.name), ["contact_supervisor", "intercom"]);
+    const supervisorTool = harness.tools.find((tool) => tool.name === "contact_supervisor");
+    assert.match(JSON.stringify(supervisorTool?.parameters), /interview_request/);
+    assert.match(JSON.stringify(supervisorTool?.parameters), /questions/);
   });
 });
 
@@ -258,6 +321,65 @@ test("child supervisor tool resolves target and includes run metadata", { concur
       assert.match(updateMessage.content.text, /Found a schema mismatch/);
       assert.equal(updateResult.isError, false);
 
+      const interviewReceived = once(orchestrator, "message") as Promise<[SessionInfo, Message]>;
+      const interview = {
+        title: "API migration choices",
+        description: "Choose the implementation path before edits continue.",
+        questions: [
+          { id: "context", type: "info", question: "Migration context", context: "Use the existing auth boundary." },
+          { id: "api", type: "single", question: "Which API should I target?", options: [" Stable API ", "Experimental API"] },
+          { id: "notes", type: "text", question: "Any constraints to preserve?" },
+        ],
+      };
+      const interviewResultPromise = supervisorTool.execute("interview-1", {
+        reason: "interview_request",
+        message: "Please answer both so I can continue safely.",
+        interview,
+      }, new AbortController().signal, undefined, harness.ctx);
+      const [interviewFrom, interviewMessage] = await interviewReceived;
+      assert.equal(interviewMessage.expectsReply, true);
+      assert.match(interviewMessage.content.text, /Subagent requests a structured supervisor interview/);
+      assert.match(interviewMessage.content.text, /Interview: API migration choices/);
+      assert.match(interviewMessage.content.text, /\[context\] \(info\) Migration context/);
+      assert.match(interviewMessage.content.text, /Info questions are context-only/);
+      assert.match(interviewMessage.content.text, /\[api\] \(single\) Which API should I target\?/);
+      assert.match(interviewMessage.content.text, /   - Stable API/);
+      assert.match(interviewMessage.content.text, /\[notes\] \(text\) Any constraints to preserve\?/);
+      assert.match(interviewMessage.content.text, /"responses"/);
+      assert.doesNotMatch(interviewMessage.content.text, /"id": "context"/);
+
+      const structuredReply = {
+        responses: [
+          { id: "api", value: "Stable API" },
+          { id: "notes", value: "Keep the public error shape unchanged." },
+        ],
+      };
+      const interviewReply = await orchestrator.send(interviewFrom.id, {
+        text: `\`\`\`json\n${JSON.stringify(structuredReply, null, 2)}\n\`\`\``,
+        replyTo: interviewMessage.id,
+      });
+      assert.equal(interviewReply.delivered, true);
+      const interviewResult = await interviewResultPromise;
+      assert.equal(interviewResult.isError, false);
+      assert.match(interviewResult.content[0]?.text ?? "", /Stable API/);
+      assert.deepEqual(interviewResult.details?.structuredReply, structuredReply);
+
+      const invalidReplyReceived = once(orchestrator, "message") as Promise<[SessionInfo, Message]>;
+      const invalidReplyResultPromise = supervisorTool.execute("interview-invalid-reply", {
+        reason: "interview_request",
+        interview,
+      }, new AbortController().signal, undefined, harness.ctx);
+      const [invalidReplyFrom, invalidReplyMessage] = await invalidReplyReceived;
+      const invalidReply = await orchestrator.send(invalidReplyFrom.id, {
+        text: '{"responses":[{"id":"api","value":"Removed API"}]}',
+        replyTo: invalidReplyMessage.id,
+      });
+      assert.equal(invalidReply.delivered, true);
+      const invalidReplyResult = await invalidReplyResultPromise;
+      assert.equal(invalidReplyResult.isError, false);
+      assert.equal(invalidReplyResult.details?.structuredReply, undefined);
+      assert.match(String(invalidReplyResult.details?.structuredReplyParseError), /must match one of the question options/);
+
       await harness.emitLifecycle("session_shutdown");
     });
   } finally {
@@ -265,7 +387,7 @@ test("child supervisor tool resolves target and includes run metadata", { concur
   }
 });
 
-test("child supervisor tool rejects invalid reasons", async () => {
+test("child supervisor tool rejects invalid reasons and interview payloads", async () => {
   const { default: piIntercomExtension } = await import("./index.ts");
 
   await withChildOrchestratorEnv({
@@ -280,6 +402,23 @@ test("child supervisor tool rejects invalid reasons", async () => {
     const result = await supervisorTool.execute("invalid-1", { reason: "done", message: "Finished." }, new AbortController().signal, undefined, harness.ctx);
     assert.equal(result.isError, true);
     assert.match(result.content[0]?.text ?? "", /Invalid reason/);
+
+    const missingMessageResult = await supervisorTool.execute("invalid-message", { reason: "need_decision" }, new AbortController().signal, undefined, harness.ctx);
+    assert.equal(missingMessageResult.isError, true);
+    assert.match(missingMessageResult.content[0]?.text ?? "", /Missing 'message'/);
+
+    const invalidInterviewResult = await supervisorTool.execute("invalid-interview", { reason: "interview_request", interview: { title: "Bad" } }, new AbortController().signal, undefined, harness.ctx);
+    assert.equal(invalidInterviewResult.isError, true);
+    assert.match(invalidInterviewResult.content[0]?.text ?? "", /interview\.questions must be a non-empty array/);
+
+    const invalidInfoOptionsResult = await supervisorTool.execute("invalid-info-options", {
+      reason: "interview_request",
+      interview: {
+        questions: [{ id: "context", type: "info", question: "Context", options: ["Not an answer"] }],
+      },
+    }, new AbortController().signal, undefined, harness.ctx);
+    assert.equal(invalidInfoOptionsResult.isError, true);
+    assert.match(invalidInfoOptionsResult.content[0]?.text ?? "", /options is only valid for single and multi questions/);
   });
 });
 
