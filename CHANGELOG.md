@@ -4,8 +4,10 @@ All notable changes to the `pi-intercom` extension will be documented in this fi
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-03
+
 ### Added
-- Added `brokerCommand` and `brokerArgs` config options for choosing the broker runtime command.
+- Added `brokerCommand` and `brokerArgs` config options for choosing the broker runtime command. Thanks to William Fligor for PR #12.
 
 ## [0.5.0] - 2026-05-03
 
